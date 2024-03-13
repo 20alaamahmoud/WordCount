@@ -1,8 +1,8 @@
 package org.example;
+
 import java.io.IOException;
-import java.util.Map;
-import java.util.StringTokenizer;
-import java.util.TreeMap;
+import java.util.*;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -13,6 +13,8 @@ import org.apache.hadoop.mapreduce.Mapper;
 import org.apache.hadoop.mapreduce.Reducer;
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+import java.util.HashMap;
+import java.util.Map;
 
 public class WordCount {
 
@@ -38,6 +40,11 @@ public class WordCount {
     public static class IntSumReducer extends Reducer<Text, IntWritable, Text, IntWritable> {
 
         private TreeMap<String, Integer> sortedWords = new TreeMap<>();
+        private List<String> mostFrequentWords = new ArrayList<>();
+        private int maxFrequency = Integer.MIN_VALUE;
+        private List<String> leastFrequentWords = new ArrayList<>();
+        private Map<Integer, List<String>> frequencyToWordsMap = new HashMap<>();
+        private int minFrequency = Integer.MAX_VALUE;
 
         public void reduce(Text key, Iterable<IntWritable> values, Context context)
                 throws IOException, InterruptedException {
@@ -47,12 +54,42 @@ public class WordCount {
             }
 
             sortedWords.put(key.toString(), sum);
+
+            // Update least frequent word(s) and reset the list
+            if (sum < minFrequency) {
+                leastFrequentWords.clear();
+                leastFrequentWords.add(key.toString());
+                minFrequency = sum;
+            } else if (sum > maxFrequency) {
+                mostFrequentWords.clear();
+                mostFrequentWords.add(key.toString());
+                maxFrequency = sum;
+            }
+            else if (sum == minFrequency) {
+                leastFrequentWords.add(key.toString());
+            }
+
+            // Update the map of frequency to words
+            frequencyToWordsMap.computeIfAbsent(sum, k -> new ArrayList<>()).add(key.toString());
         }
 
         @Override
         protected void cleanup(Context context) throws IOException, InterruptedException {
+            // Write the sorted words alphabetically
             for (Map.Entry<String, Integer> entry : sortedWords.entrySet()) {
                 context.write(new Text(entry.getKey()), new IntWritable(entry.getValue()));
+            }
+
+            // Write the least frequent word(s)
+            context.write(new Text("Word with smallest frequency: " + leastFrequentWords), new IntWritable(minFrequency));
+            context.write(new Text("Word with largest frequency: " + mostFrequentWords), new IntWritable(maxFrequency));
+
+
+            // Write the words with the same frequency
+            for (Map.Entry<Integer, List<String>> entry : frequencyToWordsMap.entrySet()) {
+                int frequency = entry.getKey();
+                List<String> words = entry.getValue();
+                context.write(new Text("Words with frequency " + frequency + ": " + words), new IntWritable(frequency));
             }
         }
     }
@@ -60,7 +97,6 @@ public class WordCount {
     public static void main(String[] args) throws Exception {
         Configuration conf = new Configuration();
         Job job = Job.getInstance(conf, "word count");
-
 
         Path outputDir = new Path(args[1]);
         FileSystem fs = FileSystem.get(conf);
